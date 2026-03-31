@@ -1,0 +1,94 @@
+# ============================================================================
+# FastAPI сервис конвертации документов DOC/XLS → DOCX/XLSX
+# Корпоративная сборка: Astra Linux 1.8 + Python 3.11 + LibreOffice + xvfb
+# ============================================================================
+FROM docker.repo-cd1.sfera.test.vtb.ru/pim_cpnok-ml-docker-distr/astra:1.6-py3.11 AS base
+
+USER 0
+
+ARG username
+ARG password
+ARG username_encoded
+ARG password_encoded
+
+WORKDIR /app
+
+# ── Внутренние зеркала apt (без обращения к внешним серверам) ─────────────
+RUN echo "deb http://mirror1.region.vtb.ru/stages_astra/1.8.1/repository-extended/ 1.8_x86-64 main contrib non-free" > /etc/apt/sources.list && \
+    echo "deb http://mirror1.region.vtb.ru/stages_astra/1.8.1/repository-main/ 1.8_x86-64 main contrib non-free" >> /etc/apt/sources.list && \
+    echo "Acquire::http::mirror1.region.vtb.ru::Verify-Peer \"false\";" > /etc/apt/apt.conf.d/99-verify-peer.conf
+
+# ── Установка системных зависимостей ─────────────────────────────────────
+RUN apt update && apt install -y --allow-downgrades \
+    # Системные утилиты (из контурного окружения)
+    systemd-timesyncd \
+    libparsec-base3=3.9+ci132 \
+    libsystemd0=252.17-1~deb12u1astra.sel+ci13+b1 \
+    libparsec-aud3 \
+    libudev1=252.17-1~deb12u1astra.sel+ci13+b1 \
+    libssl-dev \
+    pkg-config \
+    udev \
+    polkitd \
+    # LibreOffice и компоненты для работы с DOC/XLS
+    libreoffice \
+    libreoffice-writer \
+    libreoffice-calc \
+    # Виртуальный X11-дисплей (требуется для xvfb-run в converter.py)
+    xvfb \
+    # Критические зависимости для headless-режима
+    libx11-6 libxext6 libxrender1 libxt6 libgl1 libsm6 libice6 libxinerama1 libfontconfig1 libdbus-1-3 \
+    # Qt / XCB платформа
+    libxcb-xinerama0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
+    libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-xfixes0 \
+    libxcb-xkb1 libxkbcommon-x11-0 libxcb-cursor0 \
+    # Шрифты
+    fonts-dejavu fonts-dejavu-core fonts-liberation fonts-freefont-ttf \
+    fontconfig libglib2.0-0 libnss3 libgtk-3-0 libx11-xcb1 libxcb1 libxcb-render0 libxcb-shm0 libxkbcommon0 \
+    # Утилиты
+    curl \
+    && apt clean && rm -rf /var/lib/apt/lists/* \
+    && libreoffice --version || true
+
+# ── Python-зависимости через uv + внутренний PyPI ────────────────────────
+RUN python -m pip install --break-system-packages uv==0.9.3 \
+    --trusted-host misc.repo-cd1.sfera.test.vtb.ru \
+    --extra-index-url https://${username_encoded}:${password_encoded}@misc.repo-cd1.sfera.test.vtb.ru/repository/pim_cpnok-ml-pypi/simple \
+    --index-url https://${username_encoded}:${password_encoded}@misc.repo-cd1.sfera.test.vtb.ru/repository/pim_cpnok-ml-pypi-proxy-group/simple
+
+COPY pyproject.toml uv.lock ./
+RUN --mount=type=secret,id=netrc,dst=/root/.netrc uv sync --no-cache --no-dev
+
+# ── Копирование приложения ────────────────────────────────────────────────
+COPY app/converter.py .
+COPY app/main.py .
+
+# ── Переменные окружения ──────────────────────────────────────────────────
+ENV HOME=/tmp \
+    PYTHONUNBUFFERED=1 \
+    LIBREOFFICE_PATH=/usr/lib/libreoffice/program/soffice \
+    RAW_DATA_DIR=/app/data/raw_data \
+    PREPARED_DATA_DIR=/app/data/prepared_data \
+    API_PORT=8080 \
+    # LibreOffice headless — без Java, без GUI
+    SAL_DISABLE_JAVA=1 \
+    SAL_NO_MCONF=1 \
+    SAL_NO_OPENCL=1 \
+    SAL_ENABLE_FILE_LOCKING=0 \
+    SAL_USE_VCLPLUGIN=gen \
+    GDK_BACKEND=none \
+    # Qt: offscreen-рендеринг без физического дисплея
+    QT_QPA_PLATFORM=offscreen \
+    QT_LOGGING_RULES="*.debug=false"
+
+# ── Подготовка директорий данных ─────────────────────────────────────────
+RUN mkdir -p /app/data/raw_data /app/data/prepared_data
+
+# ── Entrypoint: настраивает XDG-директории под текущего пользователя ─────
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+EXPOSE 8080
+
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["uv", "run", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]

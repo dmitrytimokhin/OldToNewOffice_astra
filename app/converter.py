@@ -102,9 +102,13 @@ class DocumentConverter:
             # LibreOffice автоматически выберет правильный фильтр по расширению
             result = subprocess.run(
                 [
+                    "xvfb-run", "-a",
                     self.libreoffice_path,
                     "--headless",
                     "--invisible",
+                    "--norestore",
+                    "--nofirststartwizard",
+                    "-env:UserInstallation=file:///tmp/lo-userprofile",
                     "--convert-to", target_ext,  # ← Без двоеточия и фильтра!
                     "--outdir", str(dst_dir),
                     str(src)
@@ -132,10 +136,12 @@ class DocumentConverter:
             actual_files = [f.name for f in dst_dir.iterdir() if f.is_file()]
             logger.debug(f"Файлы в папке вывода ({dst_dir}): {actual_files}")
             
-            stderr_preview = result.stderr[:500].replace('\n', ' ').strip()
+            stdout_preview = result.stdout[:300].replace('\n', ' ').strip()
+            stderr_preview = result.stderr[:300].replace('\n', ' ').strip()
             logger.error(
                 f"Не найден сконвертированный файл для {src.name}. "
-                f"Код возврата: {result.returncode}. stderr: {stderr_preview}"
+                f"Код возврата: {result.returncode}. "
+                f"stdout: {stdout_preview} | stderr: {stderr_preview}"
             )
             return None
 
