@@ -12,6 +12,7 @@ from datetime import datetime
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 # ✅ Прямой импорт: converter.py лежит в той же папке
@@ -231,6 +232,32 @@ async def list_files(path: str, recursive: bool = Query(default=False)):
     except Exception as e:
         logger.error(f"❌ Ошибка чтения файлов: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to list files: {str(e)}")
+
+@app.get("/download/{path}/{file}")
+async def download_file(path: str, file: str):
+    """
+    Скачать файл из указанной папки на локальное устройство.
+
+    Params:
+    - path: "raw" или "prepared"
+    - file: имя файла (без путей)
+
+    Example:
+        curl -OJ http://localhost:8000/download/prepared/document.docx
+    """
+    base_dir = _validate_path_param(path)
+    file_path = _safe_join(base_dir, file)
+
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail=f"File '{file}' not found in '{path}'")
+
+    logger.info(f"⬇️ Скачивание файла: {file_path}")
+    return FileResponse(
+        path=file_path,
+        filename=file_path.name,
+        media_type="application/octet-stream"
+    )
+
 
 @app.delete("/delete/{path}/{file}", response_model=DeleteResponse)
 async def delete_file(path: str, file: str):
