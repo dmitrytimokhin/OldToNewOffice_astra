@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 from datetime import datetime
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Query
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Query, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
@@ -232,6 +232,46 @@ async def list_files(path: str, recursive: bool = Query(default=False)):
     except Exception as e:
         logger.error(f"❌ Ошибка чтения файлов: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to list files: {str(e)}")
+
+@app.post("/upload", response_model=FileInfo)
+async def upload_file(file: UploadFile = File(...)):
+    """
+    Загрузить файл в raw_data для последующей конвертации.
+
+    Поддерживаемые форматы: .doc, .docx, .xls, .xlsx
+
+    Example (notebook):
+        with open("document.doc", "rb") as f:
+            requests.post(f"{BASE_URL}/upload", files={"file": f})
+    """
+    allowed_extensions = {".doc", ".docx", ".xls", ".xlsx"}
+    suffix = Path(file.filename).suffix.lower()
+
+    if suffix not in allowed_extensions:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Неподдерживаемый формат '{suffix}'. Допустимы: {', '.join(allowed_extensions)}"
+        )
+
+    save_path = _safe_join(RAW_DATA_DIR, file.filename)
+
+    try:
+        with open(save_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+
+        stat = save_path.stat()
+        logger.info(f"⬆️ Загружен файл: {save_path} ({stat.st_size} байт)")
+        return FileInfo(
+            name=save_path.name,
+            relative_path=save_path.name,
+            size_bytes=stat.st_size,
+            modified_timestamp=stat.st_mtime,
+            modified_human=datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+        )
+    except Exception as e:
+        logger.error(f"❌ Ошибка загрузки файла: {e}")
+        raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
+
 
 @app.get("/download/{path}/{file}")
 async def download_file(path: str, file: str):
